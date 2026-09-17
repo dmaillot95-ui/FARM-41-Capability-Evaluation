@@ -1,0 +1,87 @@
+name: CEREBRON Farm 41 Capability Evaluation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  agents:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - {role: CAPABILITY_CLAIM_AUDITOR, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: BENCHMARK_VALIDITY_AUDITOR, model: huggingface-projects/gemma-2-9b-it}
+          - {role: TASK_PERFORMANCE_EVALUATOR, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: TRANSFER_EVALUATOR, model: huggingface-projects/gemma-2-9b-it}
+          - {role: ROBUSTNESS_EVALUATOR, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: GENERALIZATION_AUDITOR, model: huggingface-projects/gemma-2-9b-it}
+          - {role: CALIBRATION_EVALUATOR, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: REPRODUCIBILITY_EVALUATOR, model: huggingface-projects/gemma-2-9b-it}
+          - {role: FAILURE_PROFILE_ANALYST, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: LIMITATIONS_AUDITOR, model: huggingface-projects/gemma-2-9b-it}
+          - {role: DISTRIBUTION_SHIFT_EVALUATOR, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: ADVERSARIAL_CAPABILITY_TESTER, model: huggingface-projects/gemma-2-9b-it}
+          - {role: REAL_WORLD_TRANSFER_AUDITOR, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: TOOL_USE_CAPABILITY_EVALUATOR, model: huggingface-projects/gemma-2-9b-it}
+          - {role: LONG_HORIZON_TASK_EVALUATOR, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: CONSISTENCY_EVALUATOR, model: huggingface-projects/gemma-2-9b-it}
+          - {role: EVIDENCE_QUALITY_AUDITOR, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: UNKNOWN_CAPABILITY_BOUNDARY_AUDITOR, model: huggingface-projects/gemma-2-9b-it}
+          - {role: INDEPENDENT_CAPABILITY_RED_TEAM, model: huggingface-projects/llama-3.2-3B-Instruct}
+          - {role: OMEGA_CAPABILITY_JUDGE, model: huggingface-projects/gemma-2-9b-it}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --upgrade hf-gradio
+      - name: Run external model
+        env:
+          ROLE: ${{ matrix.role }}
+          MODEL: ${{ matrix.model }}
+        run: python worker/agent.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: farm41-${{ matrix.role }}
+          path: out/${{ matrix.role }}.json
+
+  omega:
+    needs: agents
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packets
+      - name: Build Omega packet
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          rows=[]
+          for p in pathlib.Path('packets').rglob('*.json'):
+              try: rows.append(json.loads(p.read_text()))
+              except Exception: pass
+          success=[r for r in rows if r.get('inference_success') is True and r.get('status')=='UNREVIEWED_EXTERNAL_AGENT_OUTPUT']
+          fail=[r for r in rows if r not in success]
+          packet={
+            'farm':41,
+            'name':'capability-evaluation',
+            'roles_returned':len(rows),
+            'successful_external_ai_calls':len(success),
+            'failed_external_ai_calls':len(fail),
+            'status':'UNREVIEWED_EXTERNAL_AGENT_OUTPUT',
+            'rules':['CLAIM<=EVIDENCE','PERFORMANCE_ON_ONE_TASK!=GENERAL_CAPABILITY','SIMULATION!=TEST','UNKNOWN_REMAINS_UNKNOWN'],
+            'rows':rows
+          }
+          pathlib.Path('omega').mkdir()
+          pathlib.Path('omega/packet.json').write_text(json.dumps(packet,ensure_ascii=False,indent=2))
+          print(json.dumps({k:packet[k] for k in ('roles_returned','successful_external_ai_calls','failed_external_ai_calls')}))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capability-evaluation-farm-41-omega-packet
+          path: omega/packet.json
